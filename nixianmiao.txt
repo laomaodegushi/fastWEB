@@ -4,8 +4,5 @@ dasda`:wq`:wq
 `dasda
 `:`add oneline
 zancunqou
-<<<<<<< HEAD
-=======
-branch 
 branch21
->>>>>>> dev
+issuea
