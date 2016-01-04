@@ -1,0 +1,140 @@
+#include <stdio.h> 
+#include <sys/socket.h> 
+#include <sys/epoll.h> 
+#include <fcntl.h> 
+#include <string.h> 
+#include <errno.h> 
+#include <netinet/in.h> 
+#include <arpa/inet.h> 
+
+#define BUFSIZE         64000 
+#define MAXSIZE         256 
+#define MAXLINE         32 
+#define SIN_PORT        9090
+
+int setnonblock(int sock) 
+{ 
+     int flags = fcntl(sock, F_GETFL, 0); 
+
+     if(-1 == flags) { 
+            perror("fcntl(sock, F_GETFL)"); 
+            return -1; 
+     } 
+
+     flags |= O_NONBLOCK; 
+
+     if(-1 == fcntl(sock, F_SETFL, flags)) { 
+            perror("fcntl(sock, F_SETFT, flags)"); 
+            return -2; 
+     } 
+
+     return 0; 
+} 
+
+int main(int argc, char *argv[]) 
+{ 
+     int n, listenfd, connfd, sockfd, epfd, nfds; 
+    
+     char buf[BUFSIZE];        
+     struct epoll_event ev, events[MAXSIZE]; 
+
+     epfd = epoll_create(MAXSIZE); 
+
+     struct sockaddr_in clientaddr; 
+     struct sockaddr_in serveraddr; 
+
+     listenfd = socket(AF_INET, SOCK_STREAM, 0); 
+     setnonblock(listenfd); 
+
+     ev.data.fd = listenfd; 
+     ev.events = EPOLLIN | EPOLLET; 
+
+     epoll_ctl(epfd, EPOLL_CTL_ADD, listenfd, &ev); 
+     
+     memset(&serveraddr, 0, sizeof(serveraddr)); 
+     serveraddr.sin_family = AF_INET; 
+     serveraddr.sin_addr.s_addr = htonl(INADDR_ANY); 
+     serveraddr.sin_port = htons(SIN_PORT); 
+
+     if(bind(listenfd, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) != 0) { 
+         perror("bind failed");
+         return -1;
+     } 
+
+     if(listen(listenfd, MAXLINE) != 0) { 
+         perror("listen failed");
+         return -2;
+     } 
+
+     printf("began to accept...\n"); 
+     while (1)
+     { 
+        nfds = epoll_wait(epfd, events, 32, 10000); 
+        if (nfds == -1) {
+            if (EINTR == errno) {
+                continue;
+            }
+            fprintf(stdout, "epoll_ctl error");
+            exit(EXIT_FAILURE);
+        }
+          
+        for(i=0; i<nfds; ++i) 
+        { 
+            if(events[i].data.fd == listenfd)
+            { 
+                connfd = accept(listenfd, (struct sockaddr *)&clientaddr, &clilen); 
+                if(connfd < 0) { 
+                    perror("accept failed");
+                    return -3;
+                } 
+
+                printf("accepted..\n"); 
+
+                setnonblock(connfd); 
+
+                ev.data.fd = connfd; 
+                ev.events = EPOLLIN | EPOLLET; 
+
+                epoll_ctl(epfd, EPOLL_CTL_ADD, connfd, &ev); 
+            }
+            else if(events[i].events & EPOLLIN) 
+            { 
+                if((sockfd = events[i].data.fd) < 0) 
+                        continue; 
+
+                if((n = read(sockfd, buf, BUFSIZE)) < 0) 
+                { 
+                    if(errno == ECONNRESET) {    
+                        close(sockfd); 
+                        events[i].data.fd = -1; 
+                    } else { 
+                        perror("read failed"); 
+                    } 
+                } 
+                else if(0 == n) 
+                { 
+                    close(sockfd); 
+                    events[i].data.fd = -1; 
+                } 
+                printf("Read the buf: %s\n", buf); 
+
+                ev.data.fd = sockfd; 
+                ev.events = EPOLLOUT | EPOLLET; 
+                         
+                epoll_ctl(epfd, EPOLL_CTL_MOD, sockfd, &ev); 
+            } 
+            else if(events[i].events & EPOLLOUT) 
+            { 
+                sockfd = events[i].data.fd; 
+                char *sndbuf = "I get your message!"; 
+                write(sockfd,sndbuf, 10); 
+
+                ev.data.fd = sockfd; 
+                ev.events = EPOLLIN | EPOLLET; 
+
+                epoll_ctl(epfd, EPOLL_CTL_MOD, sockfd, &ev); 
+            } 
+        } 
+    }     
+    return 0; 
+}
